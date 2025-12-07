@@ -2,7 +2,7 @@
 
 A WhatsApp-like chat application with **military-grade end-to-end encryption**, built with Next.js 16, React 19, SQLite + Prisma, and deployable to Android/iOS via Capacitor.
 
-![SecureChat Demo](https://via.placeholder.com/800x400/0b141a/00a884?text=SecureChat+-+E2E+Encrypted+Messaging)
+![SecureChat Demo](public/secure-chat-demo.png)
 
 ## ✨ Features
 
