@@ -1,0 +1,228 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// User model - stores user credentials and profile
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  email        String   @unique
+  displayName  String
+  passwordHash String
+  publicKey    String?  // E2E encryption public key
+  avatarUrl    String?
+  isOnline     Boolean  @default(false)
+  lastSeen     DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  sentMessages     Message[]      @relation("SentMessages")
+  receivedMessages Message[]      @relation("ReceivedMessages")
+  chatParticipants ChatParticipant[]
+  sessions         Session[]
+
+  @@index([email])
+  @@index([username])
+}
+
+// Session model - for JWT token management and device tracking
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  deviceInfo String?
+  ipAddress String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+// Chat model - represents a conversation (1-on-1 or group)
+model Chat {
+  id        String   @id @default(uuid())
+  name      String?  // Only for group chats
+  isGroup   Boolean  @default(false)
+  avatarUrl String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  participants ChatParticipant[]
+  messages     Message[]
+
+  @@index([updatedAt])
+}
+
+// ChatParticipant - junction table for users in chats
+model ChatParticipant {
+  id        String   @id @default(uuid())
+  chatId    String
+  userId    String
+  role      String   @default("member") // "admin", "member"
+  joinedAt  DateTime @default(now())
+  leftAt    DateTime?
+  mutedUntil DateTime?
+  
+  // E2E: Encrypted shared key for this user in this chat
+  encryptedChatKey String?
+
+  // Relations
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([chatId, userId])
+  @@index([chatId])
+  @@index([userId])
+}
+
+// Message model - stores encrypted messages
+model Message {
+  id         String   @id @default(uuid())
+  chatId     String
+  senderId   String
+  recipientId String?  // For 1-on-1 chats
+
+  // E2E Encrypted content - server never sees plaintext
+  ciphertext String   // Base64 encoded encrypted message
+  iv         String   // Base64 encoded initialization vector
+  
+  // Message metadata (not encrypted)
+  messageType String  @default("text") // "text", "image", "file", "audio"
+  
+  // Delivery status
+  status     String   @default("sent") // "sending", "sent", "delivered", "read"
+  deliveredAt DateTime?
+  readAt     DateTime?
+  
+  // Editing and deletion
+  isEdited   Boolean  @default(false)
+  editedAt   DateTime?
+  isDeleted  Boolean  @default(false)
+  deletedAt  DateTime?
+  
+  // Self-destructing messages
+  expiresAt  DateTime?
+  
+  // Timestamps
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // For message threading/replies
+  replyToId  String?
+  replyTo    Message?  @relation("MessageReplies", fields: [replyToId], references: [id])
+  replies    Message[] @relation("MessageReplies")
+
+  // Relations
+  chat      Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender    User @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient User? @relation("ReceivedMessages", fields: [recipientId], references: [id], onDelete: SetNull)
+
+  // Attachments and reactions
+  attachments Attachment[]
+  reactions   MessageReaction[]
+
+  @@index([chatId, createdAt])
+  @@index([senderId])
+  @@index([recipientId])
+  @@index([status])
+  @@index([expiresAt])
+}
+
+// Message Reactions - emoji reactions to messages
+model MessageReaction {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  emoji     String   // The emoji reaction (e.g., "👍", "❤️", "😂")
+  createdAt DateTime @default(now())
+
+  // Relations
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+  @@index([userId])
+}
+
+// Attachment model - for file/media attachments
+model Attachment {
+  id         String   @id @default(uuid())
+  messageId  String
+  
+  // File info
+  filename   String
+  mimeType   String
+  size       Int      // Size in bytes
+  
+  // Encrypted file data or URL
+  encryptedUrl String? // For cloud storage
+  encryptedData Bytes? // For small files stored in DB
+  
+  // Encryption metadata
+  fileIv     String?  // IV for file encryption
+  fileHash   String?  // SHA-384 hash for integrity
+
+  createdAt  DateTime @default(now())
+
+  // Relations
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+}
+
+// KeyExchange model - for E2E key exchange
+model KeyExchange {
+  id           String   @id @default(uuid())
+  fromUserId   String
+  toUserId     String
+  publicKey    String   // Ephemeral public key for this exchange
+  status       String   @default("pending") // "pending", "completed", "expired"
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([fromUserId])
+  @@index([toUserId])
+  @@index([status])
+}
+
+// AuditLog model - for security auditing
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String   // "login", "logout", "password_change", "key_rotation", etc.
+  ipAddress String?
+  userAgent String?
+  metadata  String?  // JSON string for additional data
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// RateLimitRecord - for tracking rate limits per user/IP
+model RateLimitRecord {
+  id         String   @id @default(uuid())
+  identifier String   // IP address or user ID
+  endpoint   String   // API endpoint or action
+  count      Int      @default(1)
+  windowStart DateTime @default(now())
+  
+  @@unique([identifier, endpoint])
+  @@index([identifier])
+  @@index([windowStart])
+}
